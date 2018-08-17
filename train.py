@@ -5,17 +5,23 @@ import argparse
 from io import open
 import torch
 import random
+import matplotlib
+import numpy as np
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
 
 import my_utils as utils
 import nn_model
 
 
 def train(train_src, train_re, train_tgt, valid_src, valid_re, valid_tgt,
-          s_vocab, t_vocab, encoder, decoder, epoch_num, batch_size):
+          s_vocab, t_vocab, encoder, decoder, epoch_num, batch_size, train_reorder=True):
     t_vocab_list = [k for k, _ in sorted(t_vocab.items(), key=lambda x: x[1])]
     encoder_optimizer = torch.optim.Adam(encoder.parameters(), weight_decay=1e-6)
     decoder_optimizer = torch.optim.Adam(decoder.parameters(), weight_decay=1e-6)
     encoder_criterion, decoder_criterion = torch.nn.CrossEntropyLoss(), torch.nn.CrossEntropyLoss()
+    train_losses = []
+
     for e in range(epoch_num):
         print('Epoch %d begin...' % (e + 1))
         enc_sum_loss, dec_sum_loss = 0, 0
@@ -52,17 +58,20 @@ def train(train_src, train_re, train_tgt, valid_src, valid_re, valid_tgt,
                 pred_words = torch.tensor([[t_t[j]]])
                 pred_seq.append(topi.item())
             if (k + 1) % 10 == 0:
-                print(' '.join(t_vocab_list[t] for t in t_t))
-                print(' '.join(t_vocab_list[t] for t in pred_seq))
+                print(' '.join(t_vocab_list[t] if t < len(t_vocab_list) else t_vocab_list[0] for t in t_t))
+                print(' '.join(t_vocab_list[t] if t < len(t_vocab_list) else t_vocab_list[0]for t in pred_seq))
 
             enc_sum_loss += enc_loss.item()
             dec_sum_loss += dec_loss.item()
             dec_loss.backward(retain_graph=True)
-            enc_loss.backward(retain_graph=True)
-            encoder_optimizer.step()
+            if train_reorder:
+                enc_loss.backward(retain_graph=True)
+                encoder_optimizer.step()
             decoder_optimizer.step()
             k += 1
-        print('\nencoder loss:', enc_sum_loss, 'decoder loss:', dec_sum_loss)
+        train_losses.append(dec_sum_loss)
+        print('encoder loss:', enc_sum_loss, 'decoder loss:', dec_sum_loss)
+    return train_losses
 
 
 def parse():
@@ -124,9 +133,21 @@ def main():
 
     encoder = nn_model.ReorderingEncoder(args.vocab_size, args.embed_size, args.hidden_size)
     decoder = nn_model.AttentionDecoder(args.vocab_size, args.embed_size, args.hidden_size)
-    train(train_source_sentences, train_reorder_sentences, train_target_sentences,
-          valid_source_sentences, valid_reorder_sentences, valid_target_sentences,
-          s_vocab, t_vocab, encoder, decoder, args.epochs, args.batch_size)
+    train_loss_with_reorder = train(train_source_sentences, train_reorder_sentences, train_target_sentences,
+                       valid_source_sentences, valid_reorder_sentences, valid_target_sentences,
+                       s_vocab, t_vocab, encoder, decoder, args.epochs, args.batch_size)
+    encoder = nn_model.ReorderingEncoder(args.vocab_size, args.embed_size, args.hidden_size)
+    decoder = nn_model.AttentionDecoder(args.vocab_size, args.embed_size, args.hidden_size)
+    train_loss_wo_reorder = train(train_source_sentences, train_reorder_sentences, train_target_sentences,
+                                    valid_source_sentences, valid_reorder_sentences, valid_target_sentences,
+                                    s_vocab, t_vocab, encoder, decoder, args.epochs, args.batch_size)
+
+    plt.plot(np.array([i for i in range(args.epochs)]), train_loss_with_reorder, label='train loss with reorder')
+    plt.plot(np.array([i for i in range(args.epochs)]), train_loss_wo_reorder, label='train loss w/o reorder')
+    plt.xlabel('Epochs')
+    plt.ylabel('Loss')
+    plt.tight_layout()
+    plt.savefig('loss_curve.pdf')
 
 
 if __name__ == '__main__':
