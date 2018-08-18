@@ -14,9 +14,11 @@ import matplotlib.pyplot as plt
 import my_utils as utils
 import nn_model
 
+device = torch.device('cpu')
+
 
 def train(train_src, train_re, train_tgt, valid_src, valid_re, valid_tgt,
-          s_vocab, t_vocab, encoder, decoder, epoch_num, batch_size, train_reorder=True):
+          s_vocab, t_vocab, encoder, decoder, epoch_num, batch_size, device, train_reorder=True):
     t_vocab_list = [k for k, _ in sorted(t_vocab.items(), key=lambda x: x[1])]
     encoder_optimizer = torch.optim.Adam(encoder.parameters(), weight_decay=1e-6)
     decoder_optimizer = torch.optim.Adam(decoder.parameters(), weight_decay=1e-6)
@@ -37,7 +39,7 @@ def train(train_src, train_re, train_tgt, valid_src, valid_re, valid_tgt,
             t_s, t_r, t_t = train_src[idx], train_re[idx], train_tgt[idx]
             ehs = torch.zeros(len(t_s), encoder.hidden_size)
             init_hidden = encoder.initHidden(1)
-            xs = torch.tensor([[t] for t in t_s])
+            xs = torch.tensor([[t] for t in t_s]).to(device)
             pred_dists, ehs = encoder(xs, init_hidden)
             for pred_dist, t in zip(pred_dists, t_r):
                 enc_loss += encoder_criterion(pred_dist, torch.tensor([t]))
@@ -49,14 +51,14 @@ def train(train_src, train_re, train_tgt, valid_src, valid_re, valid_tgt,
             #     enc_loss += encoder_criterion(pred_dists.squeeze(1), torch.tensor([t_r[i]]))
             #     ehs[i] = fhbh[0, 0]
 
-            pred_words = torch.tensor([[t_vocab['<BOS>']]])
+            pred_words = torch.tensor([[t_vocab['<BOS>']]]).to(device)
             pred_seq = []
             dhidden = decoder.initHidden(1)
             for j in range(len(t_t)):
                 preds, dhidden = decoder(pred_words, dhidden, ehs)
                 topv, topi = preds.topk(1)
                 dec_loss += decoder_criterion(preds, torch.tensor([t_t[j]]))
-                pred_words = torch.tensor([[t_t[j]]])
+                pred_words = torch.tensor([[t_t[j]]]).to(device)
                 pred_seq.append(topi.item())
             if (k + 1) % 10 == 0:
                 print(' '.join(t_vocab_list[t] if t < len(t_vocab_list) else t_vocab_list[0] for t in t_t))
@@ -67,7 +69,7 @@ def train(train_src, train_re, train_tgt, valid_src, valid_re, valid_tgt,
             dec_loss.backward(retain_graph=True)
             if train_reorder:
                 enc_loss.backward(retain_graph=True)
-                encoder_optimizer.step()
+            encoder_optimizer.step()
             decoder_optimizer.step()
             k += 1
         train_losses.append(dec_sum_loss)
@@ -89,17 +91,22 @@ def parse():
     parser.add_argument('--hidden_size', '-hs', default=500, type=int)
     parser.add_argument('--batch_size', '-bs', default=500, type=int)
     parser.add_argument('--epochs', '-e', default=20, type=int)
+    parser.add_argument('--gpu_id', '-g', default=-1, type=int)
 
     args = parser.parse_args()
     return args
 
 
 def main():
+    global device
     args = parse()
     s_vocab = utils.make_vocab(args.train_src, args.vocab_size)
     t_vocab = utils.make_vocab(args.train_tgt, args.vocab_size)
     train_source_sentences, train_target_sentences, train_reorder_sentences = [], [], []
     valid_source_sentences, valid_target_sentences, valid_reorder_sentences = [], [], []
+
+    if args.gpu_id >= 0 and torch.cuda.is_available():
+        device = torch.device('cuda:' + str(args.gpu_id))
 
     with open(args.train_src, encoding='utf-8') as fin:
         for line in fin:
@@ -132,18 +139,18 @@ def main():
                 t_vocab[token] if token in t_vocab else t_vocab['<UNK>'] for token in line.strip().split(' ')
             ])
 
-    encoder = nn_model.ReorderingEncoder(args.vocab_size, args.embed_size, args.hidden_size)
-    decoder = nn_model.AttentionDecoder(args.vocab_size, args.embed_size, args.hidden_size)
+    encoder = nn_model.ReorderingEncoder(args.vocab_size, args.embed_size, args.hidden_size).to(device)
+    decoder = nn_model.AttentionDecoder(args.vocab_size, args.embed_size, args.hidden_size).to(device)
     train_loss_with_reorder = train(train_source_sentences, train_reorder_sentences, train_target_sentences,
                        valid_source_sentences, valid_reorder_sentences, valid_target_sentences,
-                       s_vocab, t_vocab, encoder, decoder, args.epochs, args.batch_size)
+                       s_vocab, t_vocab, encoder, decoder, args.epochs, args.batch_size, device)
     torch.save(encoder.state_dict(), 'encoder.model')
     torch.save(decoder.state_dict(), 'decoder.model')
-    encoder = nn_model.ReorderingEncoder(args.vocab_size, args.embed_size, args.hidden_size)
-    decoder = nn_model.AttentionDecoder(args.vocab_size, args.embed_size, args.hidden_size)
+    encoder = nn_model.ReorderingEncoder(args.vocab_size, args.embed_size, args.hidden_size).to(device)
+    decoder = nn_model.AttentionDecoder(args.vocab_size, args.embed_size, args.hidden_size).to(device)
     train_loss_wo_reorder = train(train_source_sentences, train_reorder_sentences, train_target_sentences,
                                     valid_source_sentences, valid_reorder_sentences, valid_target_sentences,
-                                    s_vocab, t_vocab, encoder, decoder, args.epochs, args.batch_size)
+                                    s_vocab, t_vocab, encoder, decoder, args.epochs, args.batch_size, device, False)
     torch.save(encoder.state_dict(), 'encoder_base.model')
     torch.save(decoder.state_dict(), 'decoder_base.model')
 
