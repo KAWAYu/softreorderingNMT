@@ -7,6 +7,7 @@ import torch
 import random
 import matplotlib
 import numpy as np
+import pickle
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
@@ -136,11 +137,18 @@ def main():
     train_loss_with_reorder = train(train_source_sentences, train_reorder_sentences, train_target_sentences,
                        valid_source_sentences, valid_reorder_sentences, valid_target_sentences,
                        s_vocab, t_vocab, encoder, decoder, args.epochs, args.batch_size)
+    torch.save(encoder.state_dict(), 'encoder.model')
+    torch.save(decoder.state_dict(), 'decoder.model')
     encoder = nn_model.ReorderingEncoder(args.vocab_size, args.embed_size, args.hidden_size)
     decoder = nn_model.AttentionDecoder(args.vocab_size, args.embed_size, args.hidden_size)
     train_loss_wo_reorder = train(train_source_sentences, train_reorder_sentences, train_target_sentences,
                                     valid_source_sentences, valid_reorder_sentences, valid_target_sentences,
                                     s_vocab, t_vocab, encoder, decoder, args.epochs, args.batch_size)
+    torch.save(encoder.state_dict(), 'encoder_base.model')
+    torch.save(decoder.state_dict(), 'decoder_base.model')
+
+    pickle.dump(s_vocab, open('s_vocab.pkl', 'wb'))
+    pickle.dump(t_vocab, open('t_vocab.pkl', 'wb'))
 
     plt.plot(np.array([i for i in range(args.epochs)]), train_loss_with_reorder, label='train loss with reorder')
     plt.plot(np.array([i for i in range(args.epochs)]), train_loss_wo_reorder, label='train loss w/o reorder')
