@@ -31,38 +31,44 @@ def train(train_src, train_re, train_tgt, valid_src, valid_re, valid_tgt,
         indexes = [i for i in range(len(train_src))]
         random.shuffle(indexes)
         k = 0
-        for idx in indexes:
+        while k < len(indexes):
             encoder_optimizer.zero_grad(), decoder_optimizer.zero_grad()
-            if (k + 1) % 10 == 0:
-                print('\r%d data end' % (k + 1))
+            batch_idx = indexes[k: min(k + batch_size, len(indexes))]
             enc_loss, dec_loss = 0, 0
-            t_s, t_r, t_t = train_src[idx], train_re[idx], train_tgt[idx]
-            ehs = torch.zeros(len(t_s), encoder.hidden_size)
-            init_hidden = encoder.initHidden(1)
-            xs = torch.tensor([[t] for t in t_s]).to(device)
-            pred_dists, ehs = encoder(xs, init_hidden)
-            for pred_dist, t in zip(pred_dists, t_r):
-                enc_loss += encoder_criterion(pred_dist, torch.tensor([t]))
-            # print(pred_dists.size())
-            # enc_loss = encoder_criterion(pred_dist, torch.tensor([[t] for t in t_r]))
-            # for i in range(len(t_s)):
-            #     fxs, bxs = torch.tensor([t_s[i]]), torch.tensor([t_s[-i - 1]])
-            #     pred_dists, fhbh, fhidden, bhidden = encoder(fxs, bxs, fhidden, bhidden)
-            #     enc_loss += encoder_criterion(pred_dists.squeeze(1), torch.tensor([t_r[i]]))
-            #     ehs[i] = fhbh[0, 0]
+            batch_t_s, batch_t_r, batch_t_t = [], [], []
+            init_hidden = encoder.initHidden(len(batch_idx), device)
+            pred_seq = [[] for _ in range(len(batch_idx))]
+            for idx in batch_idx:
+                batch_t_s.append(train_src[idx])
+                batch_t_r.append(train_re[idx])
+                batch_t_t.append(train_tgt[idx])
+            max_s_len = max(len(_t_s) for _t_s in batch_t_s)
+            for i in range(len(batch_t_s)):
+                batch_t_s[i] = batch_t_s[i] + [s_vocab['<EOS>']] * (max_s_len - len(batch_t_s[i]))
+                batch_t_r[i] = batch_t_r[i] + [s_vocab['<EOS>']] * (max_s_len - len(batch_t_r[i]))
+            max_t_len = max(len(_t_t) for _t_t in batch_t_t)
+            for i in range(len(batch_t_t)):
+                batch_t_t[i] = batch_t_t[i] + [s_vocab['<EOS>']] * (max_t_len - len(batch_t_t[i]) + 1)
 
-            pred_words = torch.tensor([[t_vocab['<BOS>']]]).to(device)
-            pred_seq = []
-            dhidden = decoder.initHidden(1)
-            for j in range(len(t_t)):
+            xs = torch.tensor(batch_t_s).to(device)
+            batch_t_r = torch.tensor(batch_t_r)
+            pred_dists, ehs = encoder(xs, init_hidden)
+            for i in range(pred_dists.size(1)):
+                enc_loss += encoder_criterion(pred_dists[:, i, :], torch.tensor(batch_t_r[:, i]))
+
+            ys = torch.tensor(batch_t_t).to(device)
+            dhidden = decoder.initHidden(len(batch_idx), device)
+            pred_words = torch.tensor([[t_vocab['<BOS>']] for _ in range(len(batch_idx))]).to(device)
+            for j in range(max_t_len):
                 preds, dhidden = decoder(pred_words, dhidden, ehs)
                 topv, topi = preds.topk(1)
-                dec_loss += decoder_criterion(preds, torch.tensor([t_t[j]]))
-                pred_words = torch.tensor([[t_t[j]]]).to(device)
-                pred_seq.append(topi.item())
-            if (k + 1) % 10 == 0:
-                print(' '.join(t_vocab_list[t] if t < len(t_vocab_list) else t_vocab_list[0] for t in t_t))
-                print(' '.join(t_vocab_list[t] if t < len(t_vocab_list) else t_vocab_list[0]for t in pred_seq))
+                dec_loss += decoder_criterion(preds, torch.tensor(ys[:, j]))
+                pred_words = torch.tensor(ys[:, j + 1]).view(-1, 1).to(device)
+                for i in range(len(pred_seq)):
+                    pred_seq[i].append(topi[i])
+            i = random.randrange(0, len(batch_idx))
+            print(' '.join(t_vocab_list[t] for t in batch_t_t[i]))
+            print(' '.join(t_vocab_list[t] for t in pred_seq[i]))
 
             enc_sum_loss += enc_loss.item()
             dec_sum_loss += dec_loss.item()
@@ -71,9 +77,11 @@ def train(train_src, train_re, train_tgt, valid_src, valid_re, valid_tgt,
                 enc_loss.backward(retain_graph=True)
             encoder_optimizer.step()
             decoder_optimizer.step()
-            k += 1
-        train_losses.append(dec_sum_loss)
+            k += batch_size
+
         print('encoder loss:', enc_sum_loss, 'decoder loss:', dec_sum_loss)
+        train_losses.append(dec_sum_loss)
+
     return train_losses
 
 
