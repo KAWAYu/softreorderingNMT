@@ -41,7 +41,7 @@ class AttentionDecoder(nn.Module):
         batch_size = xs.size(0)
         embedded = torch.tanh(self.e2h(self.embedding(xs)))
         out, h = self.gru(embedded, hidden)
-        attention_weight = torch.exp(torch.sum(ehs * h, dim=2))
+        attention_weight = torch.exp(torch.tanh(torch.sum(ehs * h, dim=2)))
         attention = attention_weight / torch.sum(attention_weight, dim=0)
         context_vector = torch.sum(ehs * attention.view(-1, batch_size, 1), dim=0)
         output = torch.tanh(self.c2h(torch.cat((h.squeeze(0), context_vector), dim=1)))
