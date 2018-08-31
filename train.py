@@ -109,18 +109,18 @@ def evaluate(encoder, decoder, src, src_re, tgt, eval_len, device, s_vocab, t_vo
         for i in range(len(batch_tgt)):
             batch_tgt[i] = batch_tgt[i] + [t_vocab['<EOS>']] * (max_t_len - len(batch_tgt[i]) + 1)
         xs = torch.tensor(batch_src).to(device)
-        reorder = torch.tensor(batch_re).to(device)
+        reorder = torch.tensor(batch_re)
         init_hidden = encoder.initHidden(len(batch_src), device)
         pred_dists, ehs = encoder(xs, init_hidden)
         for i in range(pred_dists.size(1)):
-            enc_dev_loss += encoder_criterion(pred_dists[:, i, :], torch.tensor(reorder[:, i]))
+            enc_dev_loss += encoder_criterion(pred_dists[:, i, :], torch.tensor(reorder[:, i]).to(device))
 
         ys = torch.tensor(batch_tgt)
         dhidden = decoder.initHidden(len(batch_src), device)
         pred_words = torch.tensor([[t_vocab['<BOS>']] for _ in range(len(batch_src))]).to(device)
         for j in range(max_t_len):
             preds, dhidden = decoder(pred_words, dhidden, ehs)
-            dec_dev_loss += decoder_criterion(preds, torch.tensor(ys[:, j])).to(device)
+            dec_dev_loss += decoder_criterion(preds, torch.tensor(ys[:, j]).to(device))
             pred_words = torch.tensor(ys[:, j + 1]).view(-1, 1).to(device)
         k += eval_len
     return enc_dev_loss, dec_dev_loss
