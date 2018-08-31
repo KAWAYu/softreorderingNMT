@@ -51,19 +51,19 @@ def train(train_src, train_re, train_tgt, valid_src, valid_re, valid_tgt,
                 batch_t_t[i] = batch_t_t[i] + [s_vocab['<EOS>']] * (max_t_len - len(batch_t_t[i]) + 1)
 
             xs = torch.tensor(batch_t_s).to(device)
-            batch_t_r = torch.tensor(batch_t_r)
+            batch_t_r = torch.tensor(batch_t_r).to(device)
             pred_dists, ehs = encoder(xs, init_hidden)
             for i in range(pred_dists.size(1)):
-                enc_loss += encoder_criterion(pred_dists[:, i, :], torch.tensor(batch_t_r[:, i]).to(device))
+                enc_loss += encoder_criterion(pred_dists[:, i, :], torch.tensor(batch_t_r[:, i]))
 
-            ys = torch.tensor(batch_t_t)
+            ys = torch.tensor(batch_t_t).to(device)
             dhidden = decoder.initHidden(len(batch_idx), device)
             pred_words = torch.tensor([[t_vocab['<BOS>']] for _ in range(len(batch_idx))]).to(device)
             for j in range(max_t_len):
                 preds, dhidden = decoder(pred_words, dhidden, ehs)
                 topv, topi = preds.topk(1)
-                dec_loss += decoder_criterion(preds, torch.tensor(ys[:, j]).to(device))
-                pred_words = torch.tensor(ys[:, j + 1]).view(-1, 1).to(device)
+                dec_loss += decoder_criterion(preds, torch.tensor(ys[:, j]))
+                pred_words = torch.tensor(ys[:, j + 1]).view(-1, 1)
                 for i in range(len(pred_seq)):
                     pred_seq[i].append(topi[i].item())
             i = random.randrange(0, len(batch_idx))
@@ -85,7 +85,7 @@ def train(train_src, train_re, train_tgt, valid_src, valid_re, valid_tgt,
 
         print('\nencoder loss:', enc_sum_loss, 'decoder loss:', dec_sum_loss)
         train_losses.append(dec_sum_loss)
-        enc_dev_loss, dec_dev_loss = evaluate(encoder, decoder, valid_src, valid_re, valid_tgt, 30, device, s_vocab, t_vocab)
+        enc_dev_loss, dec_dev_loss = evaluate(encoder, decoder, valid_src, valid_re, valid_tgt, 100, device, s_vocab, t_vocab)
         print('dev enc loss:', enc_dev_loss.item(), 'dev dec loss:', dec_dev_loss.item())
 
     return train_losses
@@ -109,11 +109,11 @@ def evaluate(encoder, decoder, src, src_re, tgt, eval_len, device, s_vocab, t_vo
         for i in range(len(batch_tgt)):
             batch_tgt[i] = batch_tgt[i] + [t_vocab['<EOS>']] * (max_t_len - len(batch_tgt[i]) + 1)
         xs = torch.tensor(batch_src).to(device)
-        reorder = torch.tensor(batch_re)
+        reorder = torch.tensor(batch_re).to(device)
         init_hidden = encoder.initHidden(len(batch_src), device)
         pred_dists, ehs = encoder(xs, init_hidden)
         for i in range(pred_dists.size(1)):
-            enc_dev_loss += encoder_criterion(pred_dists[:, i, :], torch.tensor(reorder[:, i]).to(device))
+            enc_dev_loss += encoder_criterion(pred_dists[:, i, :], torch.tensor(reorder[:, i]))
 
         ys = torch.tensor(batch_tgt)
         dhidden = decoder.initHidden(len(batch_src), device)

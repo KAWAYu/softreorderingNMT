@@ -50,3 +50,13 @@ class AttentionDecoder(nn.Module):
 
     def initHidden(self, batch_size, device):
         return torch.zeros(1, batch_size, self.hidden_size, device=device)
+
+
+class AttentionSeq2Seq(nn.Module):
+    def __init__(self, vocab_size, embed_size, hidden_size):
+        super(AttentionSeq2Seq, self).__init__()
+        self.enc = ReorderingEncoder(vocab_size, embed_size, hidden_size)
+        self.dec = AttentionDecoder(vocab_size, embed_size, hidden_size)
+
+    def forward(self, xs, ys):
+        pass
