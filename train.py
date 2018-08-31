@@ -36,8 +36,6 @@ def train(train_src, train_re, train_tgt, valid_src, valid_re, valid_tgt,
             batch_idx = indexes[k: min(k + batch_size, len(indexes))]
             enc_loss, dec_loss = 0, 0
             batch_t_s, batch_t_r, batch_t_t = [], [], []
-            init_hidden = encoder.initHidden(len(batch_idx), device)
-            pred_seq = [[] for _ in range(len(batch_idx))]
             for idx in batch_idx:
                 batch_t_s.append(train_src[idx])
                 batch_t_r.append(train_re[idx])
@@ -51,24 +49,19 @@ def train(train_src, train_re, train_tgt, valid_src, valid_re, valid_tgt,
                 batch_t_t[i] = batch_t_t[i] + [s_vocab['<EOS>']] * (max_t_len - len(batch_t_t[i]) + 1)
 
             xs = torch.tensor(batch_t_s).to(device)
-            batch_t_r = torch.tensor(batch_t_r).to(device)
+            batch_t_r = torch.tensor(batch_t_r)
+            init_hidden = encoder.initHidden(len(batch_idx), device)
             pred_dists, ehs = encoder(xs, init_hidden)
             for i in range(pred_dists.size(1)):
-                enc_loss += encoder_criterion(pred_dists[:, i, :], torch.tensor(batch_t_r[:, i]))
+                enc_loss += encoder_criterion(pred_dists[:, i, :], torch.tensor(batch_t_r[:, i]).to(device))
 
-            ys = torch.tensor(batch_t_t).to(device)
+            ys = torch.tensor(batch_t_t)
             dhidden = decoder.initHidden(len(batch_idx), device)
             pred_words = torch.tensor([[t_vocab['<BOS>']] for _ in range(len(batch_idx))]).to(device)
             for j in range(max_t_len):
                 preds, dhidden = decoder(pred_words, dhidden, ehs)
-                topv, topi = preds.topk(1)
-                dec_loss += decoder_criterion(preds, torch.tensor(ys[:, j]))
-                pred_words = torch.tensor(ys[:, j + 1]).view(-1, 1)
-                for i in range(len(pred_seq)):
-                    pred_seq[i].append(topi[i].item())
-            i = random.randrange(0, len(batch_idx))
-            print(' '.join(t_vocab_list[t] for t in batch_t_t[i]))
-            print(' '.join(t_vocab_list[t] if t < len(t_vocab_list) else '<UNK>' for t in pred_seq[i]))
+                dec_loss += decoder_criterion(preds, torch.tensor(ys[:, j]).to(device))
+                pred_words = torch.tensor(ys[:, j + 1]).view(-1, 1).to(device)
 
             enc_sum_loss += enc_loss.item()
             dec_sum_loss += dec_loss.item()
@@ -218,4 +211,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
