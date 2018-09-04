@@ -6,6 +6,7 @@ from io import open
 import pickle
 import torch
 import torch.nn as nn
+import random
 
 from nn_model import ReorderingEncoder, AttentionDecoder
 
@@ -36,20 +37,20 @@ def translate(output, src, encoder, decoder, s_vocab, t_vocab, vocab_list, max_l
         while k < len(src):
             src_batch = src[k: min(k + batch_len, len(src))]
             max_s_len = max(len(s) + 1 for s in src_batch)
-            for i in len(src_batch):
+            for i in range(len(src_batch)):
                 src_batch[i] = src_batch[i] + [s_vocab['<EOS>']] * (max_s_len - len(src_batch[i]))
             xs = torch.tensor(src_batch, device=device)
-            enc_init_hidden = encoder.initHidden(len(src_batch))
+            enc_init_hidden = encoder.initHidden(len(src_batch), device)
             _, ehs = encoder(xs, enc_init_hidden)
 
             prev_words = torch.tensor([[t_vocab['<BOS>']] for _ in range(len(src_batch))], device=device)
-            dec_init_hidden = decoder.initHidden(len(src_batch))
+            dhidden = decoder.initHidden(len(src_batch), device)
             pred_seqs = [[] for _ in range(len(src_batch))]
             for _ in range(max_len):
-                preds, hidden = decoder(prev_words, dec_init_hidden)
+                preds, dhidden = decoder(prev_words, dhidden, ehs)
                 _, topi = preds.topk(1)
                 for i in range(len(pred_seqs)):
-                    pred_seqs[i].append(topi[i])
+                    pred_seqs[i].append(topi[i].item())
                 if all(topii == t_vocab['<EOS>'] for topii in topi):
                     break
                 prev_words = torch.tensor([[topi[i]] for i in range(len(pred_seqs))], device=device)
@@ -73,7 +74,7 @@ def main():
 
     s_vocab = pickle.load(open(args.s_vocab, 'rb'))
     t_vocab = pickle.load(open(args.t_vocab, 'rb'))
-    t_vocab_list = [v for _, v in t_vocab.items()]
+    t_vocab_list = [k for k, _ in sorted(t_vocab.items(), key=lambda x: x[1])]
 
     encoder = ReorderingEncoder(args.vocab_size, args.embed_size, args.hidden_size)
     decoder = AttentionDecoder(args.vocab_size, args.embed_size, args.hidden_size)
@@ -84,7 +85,7 @@ def main():
     with open(args.src, encoding='utf-8') as fin:
         for line in fin:
             src.append([s_vocab[t] if t in s_vocab else s_vocab['<UNK>'] for t in line.strip().split(' ')])
-    translate(args.output, src, encoder, decoder, t_vocab, t_vocab_list, args.max_len, device)
+    translate(args.output, src, encoder, decoder, s_vocab, t_vocab, t_vocab_list, args.max_len, device)
 
 
 if __name__ == '__main__':
