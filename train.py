@@ -46,7 +46,7 @@ def train(train_src, train_re, train_tgt, valid_src, valid_re, valid_tgt,
                 batch_t_r[i] = batch_t_r[i] + [s_vocab['<EOS>']] * (max_s_len - len(batch_t_r[i]))
             max_t_len = max(len(_t_t) + 1 for _t_t in batch_t_t)
             for i in range(len(batch_t_t)):
-                batch_t_t[i] = batch_t_t[i] + [s_vocab['<EOS>']] * (max_t_len - len(batch_t_t[i]))
+                batch_t_t[i] = batch_t_t[i] + [t_vocab['<EOS>']] * (max_t_len - len(batch_t_t[i]))
 
             xs = torch.tensor(batch_t_s).to(device)
             batch_t_r = torch.tensor(batch_t_r)
@@ -65,7 +65,7 @@ def train(train_src, train_re, train_tgt, valid_src, valid_re, valid_tgt,
             for j in range(max_t_len - 1):
                 preds, dhidden = decoder(pred_words, dhidden, ehs)
                 dec_loss += decoder_criterion(preds, torch.tensor(ys[:, j]).to(device))
-                pred_words = torch.tensor(ys[:, j + 1]).view(-1, 1).to(device)
+                pred_words = torch.tensor(ys[:, j]).view(-1, 1).to(device)
                 _, topi = preds.topk(1)
                 for i in range(len(pred_seqs)):
                     pred_seqs[i].append(topi[i].item())
@@ -96,6 +96,7 @@ def train(train_src, train_re, train_tgt, valid_src, valid_re, valid_tgt,
 
 
 def evaluate(encoder, decoder, src, src_re, tgt, eval_len, device, s_vocab, t_vocab):
+    t_vocab_list = [k for k, _ in sorted(t_vocab.items(), key=lambda x: x[1])]
     with torch.set_grad_enabled(False):
         k = 0
         encoder_criterion, decoder_criterion = torch.nn.CrossEntropyLoss(), torch.nn.CrossEntropyLoss()
@@ -112,22 +113,29 @@ def evaluate(encoder, decoder, src, src_re, tgt, eval_len, device, s_vocab, t_vo
                 batch_re[i] = batch_re[i] + [s_vocab['<EOS>']] * (max_s_len - len(batch_re[i]))
             max_t_len = max(len(t) + 1 for t in batch_tgt)
             for i in range(len(batch_tgt)):
-                batch_tgt[i] = batch_tgt[i] + [t_vocab['<EOS>']] * (max_t_len - len(batch_tgt[i]) + 1)
+                batch_tgt[i] = batch_tgt[i] + [t_vocab['<EOS>']] * (max_t_len - len(batch_tgt[i]))
 
-            init_hidden = encoder.initHidden(len(batch_src), device)
             xs = torch.tensor(batch_src, device=device)
             reorder = torch.tensor(batch_re)
+            init_hidden = encoder.initHidden(len(batch_src), device)
             pred_dists, ehs = encoder(xs, init_hidden)
             for i in range(pred_dists.size(1)):
                 enc_dev_loss += encoder_criterion(pred_dists[:, i, :], torch.tensor(reorder[:, i], device=device))
 
-            dhidden = decoder.initHidden(len(batch_src), device)
             ys = torch.tensor(batch_tgt)
+            dhidden = decoder.initHidden(len(batch_src), device)
             pred_words = torch.tensor([[t_vocab['<BOS>']] for _ in range(len(batch_src))], device=device)
-            for j in range(max_t_len):
+            i = random.choice([j for j in range(len(batch_src))])
+            pred_seq = []
+            for j in range(max_t_len - 1):
                 preds, dhidden = decoder(pred_words, dhidden, ehs)
+                _, topi = preds.topk(1)
                 dec_dev_loss += decoder_criterion(preds, torch.tensor(ys[:, j], device=device))
-                pred_words = torch.tensor(ys[:, j + 1], device=device).view(-1, 1)
+                # pred_words = torch.tensor(ys[:, j + 1], device=device).view(-1, 1)
+                pred_seq.append(topi[i].item())
+                pred_words = topi.detach()
+            print(' '.join(t_vocab_list[i] for i in batch_tgt[i]))
+            print(' '.join(t_vocab_list[i] if 0 < i < len(t_vocab_list) else t_vocab_list[0] for i in pred_seq))
             k += eval_len
         return enc_dev_loss, dec_dev_loss
 
@@ -198,7 +206,7 @@ def main():
     decoder = nn_model.AttentionDecoder(args.vocab_size, args.embed_size, args.hidden_size).to(device)
     train_loss_with_reorder = train(train_source_sentences, train_reorder_sentences, train_target_sentences,
                                     valid_source_sentences, valid_reorder_sentences, valid_target_sentences,
-                                    s_vocab, t_vocab, encoder, decoder, args.epochs, args.batch_size, device)
+                                    s_vocab, t_vocab, encoder, decoder, args.epochs, args.batch_size, device, verbose=1)
     torch.save(encoder.state_dict(), 'encoder.model')
     torch.save(decoder.state_dict(), 'decoder.model')
 
