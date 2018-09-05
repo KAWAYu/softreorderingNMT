@@ -7,6 +7,7 @@ import torch
 import random
 import matplotlib
 import numpy as np
+import os
 import pickle
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -17,13 +18,35 @@ import nn_model
 device = torch.device('cpu')
 
 
+def parse():
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument('-train_src')
+    parser.add_argument('-train_re')
+    parser.add_argument('-train_tgt')
+    parser.add_argument('-valid_src')
+    parser.add_argument('-valid_re')
+    parser.add_argument('-valid_tgt')
+    parser.add_argument('--vocab_size', '-vs', default=50000, type=int)
+    parser.add_argument('--embed_size', '-es', default=500, type=int)
+    parser.add_argument('--hidden_size', '-hs', default=500, type=int)
+    parser.add_argument('--batch_size', '-bs', default=500, type=int)
+    parser.add_argument('--epochs', '-e', default=20, type=int)
+    parser.add_argument('--gpu_id', '-g', default=-1, type=int)
+    parser.add_argument('--datapath', '-dp', default='data', type=str)
+
+    args = parser.parse_args()
+    return args
+
+
 def train(train_src, train_re, train_tgt, valid_src, valid_re, valid_tgt,
-          s_vocab, t_vocab, encoder, decoder, epoch_num, batch_size, device, train_reorder=True, verbose=2):
+          s_vocab, t_vocab, encoder, decoder, epoch_num, batch_size, device, train_reorder=True, verbose=2,
+          data_path=None):
     t_vocab_list = [k for k, _ in sorted(t_vocab.items(), key=lambda x: x[1])]
     encoder_optimizer = torch.optim.Adam(encoder.parameters(), weight_decay=1e-4)
     decoder_optimizer = torch.optim.Adam(decoder.parameters(), weight_decay=1e-4)
     encoder_criterion, decoder_criterion = torch.nn.CrossEntropyLoss(), torch.nn.CrossEntropyLoss()
-    train_losses = []
+    train_enc_losses, train_dec_losses, valid_enc_losses, valid_dec_losses = [], [], [], []
 
     for e in range(epoch_num):
         print('Epoch %d begin...' % (e + 1))
@@ -86,13 +109,22 @@ def train(train_src, train_re, train_tgt, valid_src, valid_re, valid_tgt,
                       % (k + len(batch_idx), enc_loss.item(), dec_loss.item()), end='')
             k += batch_size
 
-        print('\nencoder loss:', enc_sum_loss, 'decoder loss:', dec_sum_loss)
-        train_losses.append(dec_sum_loss)
+        print('\nencoder loss:', enc_sum_loss / len(train_src), 'decoder loss:', dec_sum_loss / len(train_src))
+
+        train_enc_losses.append(enc_sum_loss)
+        train_dec_losses.append(dec_sum_loss)
         encoder_optimizer.zero_grad(), decoder_optimizer.zero_grad()
-        enc_dev_loss, dec_dev_loss = evaluate(encoder, decoder, valid_src, valid_re, valid_tgt, 100, device, s_vocab, t_vocab)
+        enc_dev_loss, dec_dev_loss = evaluate(
+            encoder, decoder, valid_src, valid_re, valid_tgt, 100, device, s_vocab, t_vocab)
+        valid_enc_losses.append(enc_dev_loss.item() / len(valid_src))
+        valid_dec_losses.append(dec_dev_loss.item() / len(valid_src))
         print('dev enc loss:', enc_dev_loss.item(), 'dev dec loss:', dec_dev_loss.item())
 
-    return train_losses
+        if data_path is not None:
+            torch.save(encoder.state_dict(), data_path + '.epoch%d.enc' % (e + 1))
+            torch.save(decoder.state_dict(), data_path + '.epoch%d.dec' % (e + 1))
+
+    return train_enc_losses, train_dec_losses, valid_enc_losses, valid_dec_losses
 
 
 def evaluate(encoder, decoder, src, src_re, tgt, eval_len, device, s_vocab, t_vocab):
@@ -131,33 +163,12 @@ def evaluate(encoder, decoder, src, src_re, tgt, eval_len, device, s_vocab, t_vo
                 preds, dhidden = decoder(pred_words, dhidden, ehs)
                 _, topi = preds.topk(1)
                 dec_dev_loss += decoder_criterion(preds, torch.tensor(ys[:, j], device=device))
-                # pred_words = torch.tensor(ys[:, j + 1], device=device).view(-1, 1)
                 pred_seq.append(topi[i].item())
                 pred_words = topi.detach()
             print(' '.join(t_vocab_list[i] for i in batch_tgt[i]))
             print(' '.join(t_vocab_list[i] if 0 < i < len(t_vocab_list) else t_vocab_list[0] for i in pred_seq))
             k += eval_len
         return enc_dev_loss, dec_dev_loss
-
-
-def parse():
-    parser = argparse.ArgumentParser()
-
-    parser.add_argument('-train_src')
-    parser.add_argument('-train_re')
-    parser.add_argument('-train_tgt')
-    parser.add_argument('-valid_src')
-    parser.add_argument('-valid_re')
-    parser.add_argument('-valid_tgt')
-    parser.add_argument('--vocab_size', '-vs', default=50000, type=int)
-    parser.add_argument('--embed_size', '-es', default=500, type=int)
-    parser.add_argument('--hidden_size', '-hs', default=500, type=int)
-    parser.add_argument('--batch_size', '-bs', default=500, type=int)
-    parser.add_argument('--epochs', '-e', default=20, type=int)
-    parser.add_argument('--gpu_id', '-g', default=-1, type=int)
-
-    args = parser.parse_args()
-    return args
 
 
 def main():
@@ -167,6 +178,8 @@ def main():
     t_vocab = utils.make_vocab(args.train_tgt, args.vocab_size)
     train_source_sentences, train_target_sentences, train_reorder_sentences = [], [], []
     valid_source_sentences, valid_target_sentences, valid_reorder_sentences = [], [], []
+    if not os.path.isdir(args.datapath):
+        os.mkdir(args.datapath)
 
     if args.gpu_id >= 0 and torch.cuda.is_available():
         device = torch.device('cuda:' + str(args.gpu_id))
@@ -204,25 +217,35 @@ def main():
 
     encoder = nn_model.ReorderingEncoder(args.vocab_size, args.embed_size, args.hidden_size).to(device)
     decoder = nn_model.AttentionDecoder(args.vocab_size, args.embed_size, args.hidden_size).to(device)
-    train_loss_with_reorder = train(train_source_sentences, train_reorder_sentences, train_target_sentences,
-                                    valid_source_sentences, valid_reorder_sentences, valid_target_sentences,
-                                    s_vocab, t_vocab, encoder, decoder, args.epochs, args.batch_size, device, verbose=1)
-    torch.save(encoder.state_dict(), 'encoder.model')
-    torch.save(decoder.state_dict(), 'decoder.model')
+    train_enc_loss_w_re, train_dec_loss_w_re, valid_enc_loss_w_re, valid_dec_loss_w_re = train(
+        train_source_sentences, train_reorder_sentences, train_target_sentences,
+        valid_source_sentences, valid_reorder_sentences, valid_target_sentences,
+        s_vocab, t_vocab, encoder, decoder, args.epochs, args.batch_size, device, verbose=1,
+        data_path=os.path.join(args.datapath, 'with_reorder.model'))
+    # torch.save(encoder.state_dict(), os.path.join(args.datapath, 'encoder.model'))
+    # torch.save(decoder.state_dict(), os.path.join(args.datapath, 'decoder.model'))
 
-    # encoder = nn_model.ReorderingEncoder(args.vocab_size, args.embed_size, args.hidden_size).to(device)
-    # decoder = nn_model.AttentionDecoder(args.vocab_size, args.embed_size, args.hidden_size).to(device)
-    # train_loss_wo_reorder = train(train_source_sentences, train_reorder_sentences, train_target_sentences,
-    #                               valid_source_sentences, valid_reorder_sentences, valid_target_sentences,
-    #                               s_vocab, t_vocab, encoder, decoder, args.epochs, args.batch_size, device, False)
+    encoder = nn_model.ReorderingEncoder(args.vocab_size, args.embed_size, args.hidden_size).to(device)
+    decoder = nn_model.AttentionDecoder(args.vocab_size, args.embed_size, args.hidden_size).to(device)
+    train_enc_loss_wo_re, train_dec_loss_wo_re, valid_enc_loss_wo_re, valid_dec_loss_wo_re = train(
+        train_source_sentences, train_reorder_sentences, train_target_sentences,
+        valid_source_sentences, valid_reorder_sentences, valid_target_sentences,
+        s_vocab, t_vocab, encoder, decoder, args.epochs, args.batch_size, device, False, verbose=1,
+        data_path=os.path.join(args.datapath, 'without_reorder.model'))
     # torch.save(encoder.state_dict(), 'encoder_base.model')
     # torch.save(decoder.state_dict(), 'decoder_base.model')
 
-    pickle.dump(s_vocab, open('s_vocab.pkl', 'wb'))
-    pickle.dump(t_vocab, open('t_vocab.pkl', 'wb'))
+    pickle.dump(s_vocab, open(os.path.join(args.datapath, 's_vocab.pkl'), 'wb'))
+    pickle.dump(t_vocab, open(os.path.join(args.datapath, 't_vocab.pkl'), 'wb'))
 
-    plt.plot(np.array([i for i in range(args.epochs)]), train_loss_with_reorder, label='train loss with reorder')
-    # plt.plot(np.array([i for i in range(args.epochs)]), train_loss_wo_reorder, label='train loss w/o reorder')
+    plt.plot(np.array([i for i in range(args.epochs)]), train_enc_loss_w_re, 'b-', label='train encoder loss with reorder')
+    plt.plot(np.array([i for i in range(args.epochs)]), train_dec_loss_w_re, 'b:', label='train decoder loss with reorder')
+    plt.plot(np.array([i for i in range(args.epochs)]), valid_enc_loss_w_re, 'g-', label='valid encoder loss with reorder')
+    plt.plot(np.array([i for i in range(args.epochs)]), valid_dec_loss_w_re, 'g:', label='valid decoder loss with reorder')
+    plt.plot(np.array([i for i in range(args.epochs)]), train_enc_loss_wo_re, 'r-', label='train encoder loss without reorder')
+    plt.plot(np.array([i for i in range(args.epochs)]), train_dec_loss_wo_re, 'r:', label='train decoder loss without reorder')
+    plt.plot(np.array([i for i in range(args.epochs)]), valid_enc_loss_wo_re, 'y-', label='valid encoder loss without reorder')
+    plt.plot(np.array([i for i in range(args.epochs)]), valid_dec_loss_wo_re, 'y:', label='valid decoder loss without reorder')
     plt.xlabel('Epochs')
     plt.ylabel('Loss')
     plt.tight_layout()
