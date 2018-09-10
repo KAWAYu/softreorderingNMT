@@ -34,6 +34,7 @@ def parse():
     parser.add_argument('--epochs', '-e', default=20, type=int)
     parser.add_argument('--gpu_id', '-g', default=-1, type=int)
     parser.add_argument('--datapath', '-dp', default='data', type=str)
+    parser.add_argument('--train_baseline', '-tbase', default=False, action='store_true')
 
     args = parser.parse_args()
     return args
@@ -71,24 +72,24 @@ def train(train_src, train_re, train_tgt, valid_src, valid_re, valid_tgt,
             for i in range(len(batch_t_t)):
                 batch_t_t[i] = batch_t_t[i] + [t_vocab['<EOS>']] * (max_t_len - len(batch_t_t[i]))
 
-            xs = torch.tensor(batch_t_s).to(device)
+            xs = torch.tensor(batch_t_s).to(device).t().contiguous()
             batch_t_r = torch.tensor(batch_t_r)
             init_hidden = encoder.initHidden(len(batch_idx), device)
             pred_dists, ehs = encoder(xs, init_hidden)
-            for i in range(pred_dists.size(1)):
-                enc_loss += encoder_criterion(pred_dists[:, i, :], torch.tensor(batch_t_r[:, i]).to(device))
+            for i in range(batch_t_r.size(1)):
+                enc_loss += encoder_criterion(pred_dists[i, :, :], torch.tensor(batch_t_r[:, i]).to(device))
 
             if train_reorder:
                 enc_loss.backward(retain_graph=True)
 
             ys = torch.tensor(batch_t_t)
             dhidden = decoder.initHidden(len(batch_idx), device)
-            pred_words = torch.tensor([[t_vocab['<BOS>']] for _ in range(len(batch_idx))]).to(device)
+            pred_words = torch.tensor([[t_vocab['<BOS>'] for _ in range(len(batch_idx))]]).to(device)
             pred_seqs = [[] for _ in range(len(batch_idx))]
             for j in range(max_t_len - 1):
                 preds, dhidden = decoder(pred_words, dhidden, ehs)
                 dec_loss += decoder_criterion(preds, torch.tensor(ys[:, j]).to(device))
-                pred_words = torch.tensor(ys[:, j]).view(-1, 1).to(device)
+                pred_words = torch.tensor(ys[:, j]).unsqueeze(0).to(device)
                 _, topi = preds.topk(1)
                 for i in range(len(pred_seqs)):
                     pred_seqs[i].append(topi[i].item())
@@ -111,8 +112,8 @@ def train(train_src, train_re, train_tgt, valid_src, valid_re, valid_tgt,
 
         print('\nencoder loss:', enc_sum_loss / len(train_src), 'decoder loss:', dec_sum_loss / len(train_src))
 
-        train_enc_losses.append(enc_sum_loss)
-        train_dec_losses.append(dec_sum_loss)
+        train_enc_losses.append(enc_sum_loss / len(train_src))
+        train_dec_losses.append(dec_sum_loss / len(train_src))
         encoder_optimizer.zero_grad(), decoder_optimizer.zero_grad()
         enc_dev_loss, dec_dev_loss = evaluate(
             encoder, decoder, valid_src, valid_re, valid_tgt, 100, device, s_vocab, t_vocab)
@@ -147,16 +148,16 @@ def evaluate(encoder, decoder, src, src_re, tgt, eval_len, device, s_vocab, t_vo
             for i in range(len(batch_tgt)):
                 batch_tgt[i] = batch_tgt[i] + [t_vocab['<EOS>']] * (max_t_len - len(batch_tgt[i]))
 
-            xs = torch.tensor(batch_src, device=device)
+            xs = torch.tensor(batch_src, device=device).to(device).t().contiguous()
             reorder = torch.tensor(batch_re)
             init_hidden = encoder.initHidden(len(batch_src), device)
             pred_dists, ehs = encoder(xs, init_hidden)
-            for i in range(pred_dists.size(1)):
-                enc_dev_loss += encoder_criterion(pred_dists[:, i, :], torch.tensor(reorder[:, i], device=device))
+            for i in range(reorder.size(1)):
+                enc_dev_loss += encoder_criterion(pred_dists[i, :, :], torch.tensor(reorder[:, i], device=device))
 
             ys = torch.tensor(batch_tgt)
             dhidden = decoder.initHidden(len(batch_src), device)
-            pred_words = torch.tensor([[t_vocab['<BOS>']] for _ in range(len(batch_src))], device=device)
+            pred_words = torch.tensor([[t_vocab['<BOS>'] for _ in range(len(batch_src))]], device=device)
             i = random.choice([j for j in range(len(batch_src))])
             pred_seq = []
             for j in range(max_t_len - 1):
@@ -164,7 +165,7 @@ def evaluate(encoder, decoder, src, src_re, tgt, eval_len, device, s_vocab, t_vo
                 _, topi = preds.topk(1)
                 dec_dev_loss += decoder_criterion(preds, torch.tensor(ys[:, j], device=device))
                 pred_seq.append(topi[i].item())
-                pred_words = topi.detach()
+                pred_words = topi.view(1, -1).detach()
             print(' '.join(t_vocab_list[i] for i in batch_tgt[i]))
             print(' '.join(t_vocab_list[i] if 0 < i < len(t_vocab_list) else t_vocab_list[0] for i in pred_seq))
             k += eval_len
@@ -222,32 +223,39 @@ def main():
         valid_source_sentences, valid_reorder_sentences, valid_target_sentences,
         s_vocab, t_vocab, encoder, decoder, args.epochs, args.batch_size, device, verbose=1,
         data_path=os.path.join(args.datapath, 'with_reorder.model'))
-    # torch.save(encoder.state_dict(), os.path.join(args.datapath, 'encoder.model'))
-    # torch.save(decoder.state_dict(), os.path.join(args.datapath, 'decoder.model'))
 
-    encoder = nn_model.ReorderingEncoder(args.vocab_size, args.embed_size, args.hidden_size).to(device)
-    decoder = nn_model.AttentionDecoder(args.vocab_size, args.embed_size, args.hidden_size).to(device)
-    train_enc_loss_wo_re, train_dec_loss_wo_re, valid_enc_loss_wo_re, valid_dec_loss_wo_re = train(
-        train_source_sentences, train_reorder_sentences, train_target_sentences,
-        valid_source_sentences, valid_reorder_sentences, valid_target_sentences,
-        s_vocab, t_vocab, encoder, decoder, args.epochs, args.batch_size, device, False, verbose=1,
-        data_path=os.path.join(args.datapath, 'without_reorder.model'))
-    # torch.save(encoder.state_dict(), 'encoder_base.model')
-    # torch.save(decoder.state_dict(), 'decoder_base.model')
+    if args.train_baseline:
+        encoder = nn_model.ReorderingEncoder(args.vocab_size, args.embed_size, args.hidden_size).to(device)
+        decoder = nn_model.AttentionDecoder(args.vocab_size, args.embed_size, args.hidden_size).to(device)
+        train_enc_loss_wo_re, train_dec_loss_wo_re, valid_enc_loss_wo_re, valid_dec_loss_wo_re = train(
+            train_source_sentences, train_reorder_sentences, train_target_sentences,
+            valid_source_sentences, valid_reorder_sentences, valid_target_sentences,
+            s_vocab, t_vocab, encoder, decoder, args.epochs, args.batch_size, device, False, verbose=1,
+            data_path=os.path.join(args.datapath, 'without_reorder.model'))
 
     pickle.dump(s_vocab, open(os.path.join(args.datapath, 's_vocab.pkl'), 'wb'))
     pickle.dump(t_vocab, open(os.path.join(args.datapath, 't_vocab.pkl'), 'wb'))
 
-    plt.plot(np.array([i for i in range(args.epochs)]), train_enc_loss_w_re, 'b-', label='train encoder loss with reorder')
-    plt.plot(np.array([i for i in range(args.epochs)]), train_dec_loss_w_re, 'b:', label='train decoder loss with reorder')
-    plt.plot(np.array([i for i in range(args.epochs)]), valid_enc_loss_w_re, 'g-', label='valid encoder loss with reorder')
-    plt.plot(np.array([i for i in range(args.epochs)]), valid_dec_loss_w_re, 'g:', label='valid decoder loss with reorder')
-    plt.plot(np.array([i for i in range(args.epochs)]), train_enc_loss_wo_re, 'r-', label='train encoder loss without reorder')
-    plt.plot(np.array([i for i in range(args.epochs)]), train_dec_loss_wo_re, 'r:', label='train decoder loss without reorder')
-    plt.plot(np.array([i for i in range(args.epochs)]), valid_enc_loss_wo_re, 'y-', label='valid encoder loss without reorder')
-    plt.plot(np.array([i for i in range(args.epochs)]), valid_dec_loss_wo_re, 'y:', label='valid decoder loss without reorder')
+    plt.plot(np.array([i for i in range(args.epochs)]), train_enc_loss_w_re, 'b-',
+             label='train encoder loss with reorder')
+    plt.plot(np.array([i for i in range(args.epochs)]), train_dec_loss_w_re, 'b:',
+             label='train decoder loss with reorder')
+    plt.plot(np.array([i for i in range(args.epochs)]), valid_enc_loss_w_re, 'g-',
+             label='valid encoder loss with reorder')
+    plt.plot(np.array([i for i in range(args.epochs)]), valid_dec_loss_w_re, 'g:',
+             label='valid decoder loss with reorder')
+    if args.train_baseline:
+        plt.plot(np.array([i for i in range(args.epochs)]), train_enc_loss_wo_re, 'r-',
+                 label='train encoder loss without reorder')
+        plt.plot(np.array([i for i in range(args.epochs)]), train_dec_loss_wo_re, 'r:',
+                 label='train decoder loss without reorder')
+        plt.plot(np.array([i for i in range(args.epochs)]), valid_enc_loss_wo_re, 'y-',
+                 label='valid encoder loss without reorder')
+        plt.plot(np.array([i for i in range(args.epochs)]), valid_dec_loss_wo_re, 'y:',
+                 label='valid decoder loss without reorder')
     plt.xlabel('Epochs')
     plt.ylabel('Loss')
+    plt.legend()
     plt.tight_layout()
     plt.savefig('loss_curve.pdf')
 
