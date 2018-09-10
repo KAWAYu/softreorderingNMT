@@ -95,8 +95,10 @@ def train(train_src, train_re, train_tgt, valid_src, valid_re, valid_tgt,
                     pred_seqs[i].append(topi[i].item())
             if verbose > 1:
                 idx = random.choice([j for j in range(len(batch_idx))])
-                print('\n' + ' '.join(t_vocab_list[i] if 0 < i < len(t_vocab_list) else t_vocab_list[0] for i in batch_t_t[idx]))
-                print(' '.join(t_vocab_list[i] if 0 < i < len(t_vocab_list) else t_vocab_list[0] for i in pred_seqs[idx]))
+                print('\n' + ' '.join(t_vocab_list[i] if 0 < i < len(t_vocab_list) else t_vocab_list[0]
+                                      for i in batch_t_t[idx]))
+                print(' '.join(t_vocab_list[i] if 0 < i < len(t_vocab_list) else t_vocab_list[0]
+                               for i in pred_seqs[idx]))
 
             enc_sum_loss += enc_loss.item()
             dec_sum_loss += dec_loss.item()
@@ -119,7 +121,8 @@ def train(train_src, train_re, train_tgt, valid_src, valid_re, valid_tgt,
             encoder, decoder, valid_src, valid_re, valid_tgt, 100, device, s_vocab, t_vocab)
         valid_enc_losses.append(enc_dev_loss.item() / len(valid_src))
         valid_dec_losses.append(dec_dev_loss.item() / len(valid_src))
-        print('dev enc loss:', enc_dev_loss.item(), 'dev dec loss:', dec_dev_loss.item())
+        print('dev enc loss:', enc_dev_loss.item() / len(valid_src),
+              'dev dec loss:', dec_dev_loss.item() / len(valid_tgt))
 
         if data_path is not None:
             torch.save(encoder.state_dict(), data_path + '.epoch%d.enc' % (e + 1))

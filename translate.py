@@ -39,11 +39,11 @@ def translate(output, src, encoder, decoder, s_vocab, t_vocab, vocab_list, max_l
             max_s_len = max(len(s) + 1 for s in src_batch)
             for i in range(len(src_batch)):
                 src_batch[i] = src_batch[i] + [s_vocab['<EOS>']] * (max_s_len - len(src_batch[i]))
-            xs = torch.tensor(src_batch, device=device)
+            xs = torch.tensor(src_batch, device=device).t().contiguous()
             enc_init_hidden = encoder.initHidden(len(src_batch), device)
             _, ehs = encoder(xs, enc_init_hidden)
 
-            prev_words = torch.tensor([[t_vocab['<BOS>']] for _ in range(len(src_batch))], device=device)
+            prev_words = torch.tensor([[t_vocab['<BOS>'] for _ in range(len(src_batch))]], device=device)
             dhidden = decoder.initHidden(len(src_batch), device)
             pred_seqs = [[] for _ in range(len(src_batch))]
             for _ in range(max_len):
@@ -53,7 +53,7 @@ def translate(output, src, encoder, decoder, s_vocab, t_vocab, vocab_list, max_l
                     pred_seqs[i].append(topi[i].item())
                 if all(topii == t_vocab['<EOS>'] for topii in topi):
                     break
-                prev_words = torch.tensor([[topi[i]] for i in range(len(pred_seqs))], device=device)
+                prev_words = topi.view(1, -1).detach()
 
             for pred_seq in pred_seqs:
                 _pred_seq = []
